@@ -10,9 +10,9 @@ Python bindings for Tantivy.
 
 This fork adds support for facets.
 
-* add_facet_field() accepts option stored=True|False
-* searcher.search() accepts option: include_facets=<field-name>
-* SearchResult.facets contains list of relevantfacets
+* add_facet_field() accepts option: stored=True|False
+* searcher.search() accepts option: include_facets="field-name"
+* SearchResult.facets contains list of relevant facets
 
 # Installation
 

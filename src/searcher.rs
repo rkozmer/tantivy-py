@@ -3,7 +3,7 @@
 use crate::{document::Document, get_field, query::Query, to_pyerr};
 use pyo3::{exceptions::PyValueError, prelude::*, PyObjectProtocol};
 use tantivy as tv;
-use tantivy::collector::{Count, MultiCollector, TopDocs};
+use tantivy::collector::{Count, MultiCollector, TopDocs, FacetCollector};
 
 /// Tantivy's Searcher class
 ///
@@ -18,6 +18,9 @@ enum Fruit {
     Score(f32),
     Order(u64),
 }
+
+#[derive(Clone, Default, Eq, Hash, PartialEq, Ord, PartialOrd)]
+pub struct Facet(String);
 
 impl std::fmt::Debug for Fruit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -41,6 +44,7 @@ impl ToPyObject for Fruit {
 /// Object holding a results successful search.
 pub(crate) struct SearchResult {
     hits: Vec<(Fruit, DocAddress)>,
+    facets: Vec<(String, u64)>,
     #[pyo3(get)]
     /// How many documents matched the query. Only available if `count` was set
     /// to true during the search.
@@ -74,6 +78,15 @@ impl SearchResult {
             .collect();
         Ok(ret)
     }
+    #[getter]
+    fn facets(&self, py: Python) -> PyResult<Vec<(String, u64)>> {
+        let ret: Vec<(String, u64)> = self
+            .facets
+            .iter()
+            .map(|(result)| {result.clone()})
+            .collect();
+        Ok(ret)
+    }
 }
 
 #[pymethods]
@@ -92,6 +105,7 @@ impl Searcher {
     ///         fields.
     ///     offset (Field, optional): The offset from which the results have
     ///         to be returned.
+    ///     include_facets (Field, optional): Includes facets.
     ///
     /// Returns `SearchResult` object.
     ///
@@ -105,6 +119,7 @@ impl Searcher {
         count: bool,
         order_by_field: Option<&str>,
         offset: usize,
+        include_facets: Option<&str>
     ) -> PyResult<SearchResult> {
         let mut multicollector = MultiCollector::new();
 
@@ -114,7 +129,12 @@ impl Searcher {
             None
         };
 
-        let (mut multifruit, hits) = {
+        let (mut multifruit, hits, facets) = {
+            let facet_field = get_field(&self.inner.index().schema(), include_facets.as_deref().unwrap_or("source"))?;
+            let mut facet_collector = FacetCollector::for_field(facet_field);
+            facet_collector.add_facet("/");
+            let facet_counts = multicollector.add_collector(facet_collector);
+
             if let Some(order_by) = order_by_field {
                 let field = get_field(&self.inner.index().schema(), order_by)?;
                 let collector = TopDocs::with_limit(limit)
@@ -125,6 +145,12 @@ impl Searcher {
 
                 match ret {
                     Ok(mut r) => {
+                        let facet_docs = facet_counts.extract(&mut r);
+                        let facets: Vec<(String, u64)> = facet_docs.get("/")
+                            .map(|(f, d)| {
+                                (String::from(f.encoded_str()), d)
+                            }).collect();
+
                         let top_docs = top_docs_handle.extract(&mut r);
                         let result: Vec<(Fruit, DocAddress)> = top_docs
                             .iter()
@@ -132,7 +158,7 @@ impl Searcher {
                                 (Fruit::Order(*f), DocAddress::from(d))
                             })
                             .collect();
-                        (r, result)
+                        (r, result, facets)
                     }
                     Err(e) => return Err(PyValueError::new_err(e.to_string())),
                 }
@@ -143,6 +169,12 @@ impl Searcher {
 
                 match ret {
                     Ok(mut r) => {
+                        let facet_docs = facet_counts.extract(&mut r);
+                        let facets: Vec<(String, u64)> = facet_docs.get("/")
+                            .map(|(f, d)| {
+                                (String::from(f.encoded_str()), d)
+                            }).collect();
+
                         let top_docs = top_docs_handle.extract(&mut r);
                         let result: Vec<(Fruit, DocAddress)> = top_docs
                             .iter()
@@ -150,7 +182,7 @@ impl Searcher {
                                 (Fruit::Score(*f), DocAddress::from(d))
                             })
                             .collect();
-                        (r, result)
+                        (r, result, facets)
                     }
                     Err(e) => return Err(PyValueError::new_err(e.to_string())),
                 }
@@ -162,7 +194,7 @@ impl Searcher {
             None => None,
         };
 
-        Ok(SearchResult { hits, count })
+        Ok(SearchResult { hits, count, facets })
     }
 
     /// Returns the overall number of documents in the index.

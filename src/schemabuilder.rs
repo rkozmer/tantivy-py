@@ -233,11 +233,17 @@ impl SchemaBuilder {
     /// Add a Facet field to the schema.
     /// Args:
     ///     name (str): The name of the field.
-    fn add_facet_field(&mut self, name: &str) -> PyResult<Self> {
+    #[args(stored = false, indexed = false)]
+    fn add_facet_field(
+        &mut self, 
+        name: &str, 
+        stored: bool
+    ) -> PyResult<Self> {
         let builder = &mut self.builder;
 
         if let Some(builder) = builder.write().unwrap().as_mut() {
-            builder.add_facet_field(name, INDEXED);
+            let opts = SchemaBuilder::build_facet_option(stored, true)?;
+            builder.add_facet_field(name, opts);
         } else {
             return Err(exceptions::PyValueError::new_err(
                 "Schema builder object isn't valid anymore.",
@@ -314,6 +320,18 @@ impl SchemaBuilder {
         } else {
             opts
         };
+
+        Ok(opts)
+    }
+
+    fn build_facet_option(
+        stored: bool,
+        indexed: bool,
+    ) -> PyResult<schema::FacetOptions> {
+        let opts = schema::FacetOptions::default();
+
+        let opts = if stored { opts.set_stored() } else { opts };
+        let opts = if indexed { opts.set_indexed() } else { opts };
 
         Ok(opts)
     }
